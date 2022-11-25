@@ -1,0 +1,6 @@
+DEBUG=0
+
+# 要忽略的ARCHITECTURE目录
+ARCHITECTURE_IGNORE="debian-installer|debug"
+# 要忽略的DISTRIBUTION目录
+DISTRIBUTION_IGNORE="4\.0\.2|Intel-Edu|developer-kits"

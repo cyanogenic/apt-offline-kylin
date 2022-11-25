@@ -1,0 +1,300 @@
+#!/bin/bash
+
+APPNAME=`basename $0`
+VERSION="1.0"
+WORKSPACE=`dirname $0`
+ARCH=`dpkg --print-architecture`
+
+# sudo检查
+check_sudo()
+{
+    # 从输入中读取用户密码
+    read -s -p "请输入当前用户的密码: " SUDO_PASSWORD
+    echo -e "\n"
+    echo $SUDO_PASSWORD | sudo -S -v > /dev/null 2>&1
+    if [ $? -ne 0 ];
+    then
+        echo -e "输入的密码不正确或用户没有sudo权限\n"
+        exit 1
+    fi
+}
+
+# 帮助
+usage()
+{
+    # TODO 
+	echo "$APPNAME $VERSION"
+}
+
+# ping检测
+ping_test()
+{
+    echo -n "正在测试到 $1 的网络连接..."
+    $GET_COMMAND $1 > /dev/null 2>&1
+    if [ $? -ne 0 ];
+    then
+        echo -e "\e[31m 失败,请检查网络连接 \e[0m"
+        exit 1
+    else
+        echo -e "\e[32m 完成 \e[0m\n"
+    fi
+}
+
+conf_test()
+{
+    for CONF_FILE in apt-offline-kylin.conf mirrors.list
+    do
+        if [ ! -f "$WORKSPACE/etc/$CONF_FILE" ];
+        then
+            echo -n "缺少配置文件 $CONF_FILE ,正在从模板复制..."
+            if [ -f "$WORKSPACE/etc/$CONF_FILE.example" ];
+            then
+                cp $WORKSPACE/etc/$CONF_FILE.example $WORKSPACE/etc/$CONF_FILE
+                echo "完成"
+            else
+                echo "没有检测到配置文件及模板,请重新下载完整的程序"
+                exit 1
+            fi
+        fi
+    done
+}
+
+# 文件结尾空行检测
+newline_at_eof()
+{
+    if [ -n "$(tail -c 1 "$1")" ];
+    then
+        echo '' >> $1
+        echo "配置文件 $1 结尾没有空行,已修正"
+    fi
+}
+
+# YesNo
+yes_no()
+{
+    echo -n "$1 [Y/N] "
+    read -r input
+	case $input in
+		[Yy][Ee][Ss]|[Yy])
+			return 0
+            ;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+simulate_install()
+{
+    # 判断参数是否为空
+    if [ -z $1 ];
+    then
+        echo "选项 install 需要参数"
+        exit 1
+    else
+        shift
+    fi
+
+    # sudo检测
+    if [ $DEBUG -ne 1 ];
+    then
+        check_sudo
+    else
+        echo -e "调试开启,跳过sudo检测\n"
+    fi
+
+    # 更新系统apt数据库
+    if [[ $WORKSPACE/dists/.update-stamp -nt /var/lib/apt/periodic/update-success-stamp ]];
+    then
+        echo -n "正在更新系统apt数据库..."
+
+        # 获取系统配置的APT源
+        grep "^deb\ " /etc/apt/sources.list | while read LINE
+        do
+            URL=`echo $LINE | awk '{print $2}' | sed 's/\/$//' | sed 's#https\?://##' | sed 's#/#_#g'`
+            SITE=`echo $URL | cut -d '_' -f 1`
+            DISTRIBUTION=`echo $LINE | awk '{print $3}'` 
+            COMPONENTS=`echo $LINE | awk '{for (i=4;i<=NF;i++) printf("%s ",$i)}'`
+            
+            echo $URL $SITE
+            if [ ! -d "$WORKSPACE/dists/$SITE" ];
+            then
+                echo -e "\n资源目录下不存在源$SITE的资源文件,请按照本机的APT源配置修改$WORKSPACE/etc/mirrors.list后更新资源文件"
+            fi
+
+            # 复制InRelease
+            sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/InRelease /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'InRelease 2>/dev/null
+            if [ $? -ne 0 ];
+            then
+                echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
+                exit 1
+            fi
+
+            # 复制Packages
+            for COMPONENT in $COMPONENTS
+            do
+                sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/$COMPONENT/binary-$ARCH/Packages.gz /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz' 2>/dev/null
+                if [ $? -ne 0 ];
+                then
+                    echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
+                    exit 1
+                fi
+                sudo gzip -df /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz'
+            done
+        done
+
+        # 创建时间戳
+        sudo touch /var/lib/apt/periodic/update-stamp /var/lib/apt/periodic/update-success-stamp
+
+        echo -e "\e[32m 完成 \e[0m\n"
+    fi
+
+    # 模拟安装
+    echo -n "检索安装包及依赖列表..."
+    RET=`sudo apt-get -f install -qqq --reinstall --print-uris $@ 2>/dev/null` 
+	if [ $? -ne 0 ]; then
+		echo -e "\n请检查系统中是否存在状态异常的软件包\n程序即将退出"
+        exit 1
+    else
+        echo -e "\e[32m 完成 \e[0m\n"
+	fi
+
+    printf "%-30s\t%s\n" "包名" "下载地址"
+
+	RESFILE="$HOME/apt-offline-kylin_`date +%y%m%d-%H%M%S`.csv"
+	echo "软件包,大小,下载地址,MD5" > $RESFILE
+
+	sudo apt-get -f install -qqq --reinstall --print-uris $@ | while read LINE
+	do
+		eval $(echo $LINE | awk '{ printf("URI=%s; PKG=%s; SIZE=%s; MD5=%s", $1, $2, $3, $4)}')
+		PKG=`echo $PKG | cut -d '_' -f 1`
+		URI=`echo $URI`
+		MD5=`echo $MD5 | cut -d ':' -f 2`
+		printf "%-30s\t%s\n" $PKG $URI
+		echo "$PKG,$SIZE,$URI,$MD5" >> $RESFILE
+		chown $SUDO_USER:$SUDO_USER $RESFILE
+	done
+
+	echo -e "\n已将结果保存至 file://$RESFILE"
+}
+
+cache_check()
+{
+    if [ $DEBUG -eq 1 ];
+    then
+        echo -e "调试模式开启,跳过cache_check\n"
+        return 0
+    elif [ `find $WORKSPACE/dists -name '.update-stamp' -mtime +30 2>/dev/null | wc -l` -ne 0 ];
+    then
+        echo -e "程序已经超过30天没有更新了,建议在互联网环境中执行 $APPNAME update 更新资源文件\n"
+        return 0
+
+    elif [ `ls $WORKSPACE/dists 2>/dev/null | wc -l` -eq 0 ];
+    then
+        echo -e "您可能刚刚下载或从其它位置拷贝了本程序,请在互联网环境中执行 $APPNAME update 更新资源文件\n"
+        return 1
+    fi
+}
+
+cache_update()
+{
+    if [ "$1" != "-y" ];
+    then
+        yes_no "是否执行更新操作?"
+        if [ $? -ne 0 ];
+        then
+            exit 0
+        fi
+    fi
+
+    newline_at_eof $WORKSPACE/etc/mirrors.list
+
+    echo -e "开始更新,日志将保存到$WORKSPACE/logs/wget.log\n"
+    grep -v "^#" $WORKSPACE/etc/mirrors.list | sed 's/\/$//' | while read URL
+    do
+        ping_test $URL/
+        SITE=`echo $URL | cut -d '/' -f 3`
+        mkdir -p $WORKSPACE/logs && echo '' > $WORKSPACE/logs/wget.log
+        $GET_COMMAND $URL/dists/ | grep "<a.*>" | $WORKSPACE/utils/hxselect.$ARCH -c a -s '\n' | grep -Ev 'Parent Directory|\.\./' | sed 's/\/$//' | grep -Ev $DISTRIBUTION_IGNORE | while read DISTRIBUTION
+        do
+            echo -n "正在更新: $URL"_"$DISTRIBUTION"_InRelease ...
+            mkdir -p $WORKSPACE/dists/$SITE/$DISTRIBUTION
+            $DOWNLOAD_COMMAND -nv $URL/dists/$DISTRIBUTION/InRelease -O $WORKSPACE/dists/$SITE/$DISTRIBUTION/InRelease -a $WORKSPACE/logs/wget.log
+            if [ $? -ne 0 ];
+            then
+                echo -e "\e[31m 失败,请检查日志文件 \e[0m\n"
+                exit 1
+            else
+                echo -e "\e[32m 完成 \e[0m\n"
+            fi
+
+            $GET_COMMAND $URL/dists/$DISTRIBUTION/ | grep "<a.*>" | $WORKSPACE/utils/hxselect.$ARCH -c a -s '\n' | grep -Ev 'Parent Directory|\.\./' | sed 's/\/$//' | while read COMPONENT
+            do
+                $GET_COMMAND $URL/dists/$DISTRIBUTION/$COMPONENT/ | grep "<a.*>" | $WORKSPACE/utils/hxselect.$ARCH -c a -s '\n' | grep -Ev 'Parent Directory|\.\./' | sed 's/\/$//' | grep -Ev $ARCHITECTURE_IGNORE | while read ARCHITECTURE
+                do
+                    echo -n "正在更新: $URL"_"$DISTRIBUTION/$COMPONENT/$ARCHITECTURE ..."
+                    mkdir -p $WORKSPACE/dists/$SITE/$DISTRIBUTION/$COMPONENT/$ARCHITECTURE
+                    $DOWNLOAD_COMMAND -nv $URL/dists/$DISTRIBUTION/$COMPONENT/$ARCHITECTURE/Packages.gz -O $WORKSPACE/dists/$SITE/$DISTRIBUTION/$COMPONENT/$ARCHITECTURE/Packages.gz -a $WORKSPACE/logs/wget.log
+                    if [ $? -ne 0 ];
+                    then
+                        echo -e "\e[31m 失败,请检查日志文件 \e[0m\n"
+                        exit 1
+                    else
+                        echo -e "\e[32m 完成 \e[0m\n"
+                    fi
+                done
+            done
+        done
+    done
+
+    touch $WORKSPACE/dists/.update-stamp
+    echo "更新操作已完成,日志已保存到$WORKSPACE/logs/wget.log"
+}
+
+# 启动
+if [ -z $1 ]; then
+	usage
+	exit 1
+fi
+
+conf_test
+source $WORKSPACE/etc/apt-offline-kylin.conf
+
+cache_check
+CACHE_CHECK=$?
+
+if [ $DEBUG -eq 1 ];
+then
+    DOWNLOAD_COMMAND="echo -ne \nwget"
+else
+    DOWNLOAD_COMMAND="wget"
+fi
+
+curl > /dev/null 2>&1
+if [ $? -eq 0 ];
+then
+    GET_COMMAND="curl -ks"
+else
+    GET_COMMAND="wget -q -O-"
+fi
+
+case $1 in
+install)
+    if [ $CACHE_CHECK -eq 1 ];
+    then
+        exit 1
+    else
+        simulate_install $@
+    fi
+    ;;
+update)
+    cache_update $2
+    ;;
+-h|--help|help)
+	usage
+	;;
+*)
+    echo "无效的参数: $1"
+    exit 1
+    ;;
+esac
