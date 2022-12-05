@@ -7,3 +7,4 @@
 * usage函数
 * 利用git修复环境
 * install操作先检索包是不是存在
+* while read line 中的exit

@@ -69,7 +69,7 @@ newline_at_eof()
     fi
 }
 
-# YesNo
+# YesNo Yes返回0,No返回1
 yes_no()
 {
     echo -n "$1 [Y/N] "
@@ -84,6 +84,7 @@ yes_no()
 	esac
 }
 
+# apt install 模拟
 simulate_install()
 {
     # 判断参数是否为空
@@ -95,63 +96,20 @@ simulate_install()
         shift
     fi
 
-    # sudo检测
-    if [ $DEBUG -ne 1 ];
-    then
-        check_sudo
-    else
-        echo -e "调试开启,跳过sudo检测\n"
-    fi
-
-    # 更新系统apt数据库
+    # 判断系统apt数据库是否需要更新
     if [[ $WORKSPACE/dists/.update-stamp -nt /var/lib/apt/periodic/update-success-stamp ]];
     then
-        echo -n "正在更新系统apt数据库..."
-
-        # 获取系统配置的APT源
-        grep "^deb\ " /etc/apt/sources.list | while read LINE
-        do
-            URL=`echo $LINE | awk '{print $2}' | sed 's/\/$//' | sed 's#https\?://##' | sed 's#/#_#g'`
-            SITE=`echo $URL | cut -d '_' -f 1`
-            DISTRIBUTION=`echo $LINE | awk '{print $3}'` 
-            COMPONENTS=`echo $LINE | awk '{for (i=4;i<=NF;i++) printf("%s ",$i)}'`
-            
-            echo $URL $SITE
-            if [ ! -d "$WORKSPACE/dists/$SITE" ];
-            then
-                echo -e "\n资源目录下不存在源$SITE的资源文件,请按照本机的APT源配置修改$WORKSPACE/etc/mirrors.list后更新资源文件"
-            fi
-
-            # 复制InRelease
-            sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/InRelease /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'InRelease 2>/dev/null
-            if [ $? -ne 0 ];
-            then
-                echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
-                exit 1
-            fi
-
-            # 复制Packages
-            for COMPONENT in $COMPONENTS
-            do
-                sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/$COMPONENT/binary-$ARCH/Packages.gz /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz' 2>/dev/null
-                if [ $? -ne 0 ];
-                then
-                    echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
-                    exit 1
-                fi
-                sudo gzip -df /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz'
-            done
-        done
-
-        # 创建时间戳
-        sudo touch /var/lib/apt/periodic/update-stamp /var/lib/apt/periodic/update-success-stamp
-
-        echo -e "\e[32m 完成 \e[0m\n"
+        echo -e "当前系统的apt数据库较老,建议执行 $APPNAME update 更新"
+        yes_no "是否跳过更新操作?"
+        if [ $? -ne 0 ];
+        then
+            list_update
+        fi
     fi
 
     # 模拟安装
     echo -n "检索安装包及依赖列表..."
-    RET=`sudo apt-get -f install -qqq --reinstall --print-uris $@ 2>/dev/null` 
+    RET=`apt-get -f install -qqq --reinstall --print-uris $@ 2>/dev/null` 
 	if [ $? -ne 0 ]; then
 		echo -e "\n请检查系统中是否存在状态异常的软件包\n程序即将退出"
         exit 1
@@ -164,7 +122,7 @@ simulate_install()
 	RESFILE="$HOME/apt-offline-kylin_`date +%y%m%d-%H%M%S`.csv"
 	echo "软件包,大小,下载地址,MD5" > $RESFILE
 
-	sudo apt-get -f install -qqq --reinstall --print-uris $@ | while read LINE
+	apt-get -f install -qqq --reinstall --print-uris $@ | while read LINE
 	do
 		eval $(echo $LINE | awk '{ printf("URI=%s; PKG=%s; SIZE=%s; MD5=%s", $1, $2, $3, $4)}')
 		PKG=`echo $PKG | cut -d '_' -f 1`
@@ -178,7 +136,64 @@ simulate_install()
 	echo -e "\n已将结果保存至 file://$RESFILE"
 }
 
-cache_check()
+# 更新系统apt数据库
+list_update()
+{
+    # sudo检测
+    if [ $DEBUG -ne 1 ];
+    then
+        check_sudo
+    else
+        echo -e "调试开启,跳过sudo检测\n"
+    fi
+
+    echo -n "正在更新系统apt数据库..."
+
+    # V10SP1 2107 初装默认源修正
+    sudo sed -i '/KY-V10-SP1-$(ARCH)/c deb http:\/\/archive.kylinos.cn\/kylin\/KYLIN-ALL 10.1 main restricted universe multiverse' /etc/apt/sources.list
+
+    # 获取系统配置的APT源
+    grep "^deb\ " /etc/apt/sources.list | while read LINE
+    do
+        URL=`echo $LINE | awk '{print $2}' | sed 's/\/$//' | sed 's#https\?://##' | sed 's#/#_#g'`
+        SITE=`echo $URL | cut -d '_' -f 1`
+        DISTRIBUTION=`echo $LINE | awk '{print $3}'` 
+        COMPONENTS=`echo $LINE | awk '{for (i=4;i<=NF;i++) printf("%s ",$i)}'`
+        
+        if [ ! -d "$WORKSPACE/dists/$SITE" ];
+        then
+            echo -e "\n资源目录下不存在源$SITE的资源文件,请按照本机的APT源配置修改$WORKSPACE/etc/mirrors.list后更新资源文件"
+            exit 1
+        fi
+
+        # 复制InRelease
+        sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/InRelease /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'InRelease 2>/dev/null
+        if [ $? -ne 0 ];
+        then
+            echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
+            exit 1
+        fi
+
+        # 复制Packages
+        for COMPONENT in $COMPONENTS
+        do
+            sudo cp $WORKSPACE/dists/$SITE/$DISTRIBUTION/$COMPONENT/binary-$ARCH/Packages.gz /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz' 2>/dev/null
+            if [ $? -ne 0 ];
+            then
+                echo -e "\e[31m 失败,请检查资源文件 \e[0m\n"
+                exit 1
+            fi
+            sudo gzip -df /var/lib/apt/lists/$URL'_dists_'$DISTRIBUTION'_'$COMPONENT'_binary-'$ARCH'_Packages.gz'
+        done
+    done
+
+    # 创建时间戳
+    sudo touch /var/lib/apt/periodic/update-stamp /var/lib/apt/periodic/update-success-stamp
+
+    echo -e "\e[32m 完成 \e[0m\n"
+}
+
+dist_check()
 {
     if [ $DEBUG -eq 1 ];
     then
@@ -196,7 +211,7 @@ cache_check()
     fi
 }
 
-cache_update()
+dist_download()
 {
     if [ "$1" != "-y" ];
     then
@@ -260,7 +275,7 @@ fi
 conf_test
 source $WORKSPACE/etc/apt-offline-kylin.conf
 
-cache_check
+dist_check
 CACHE_CHECK=$?
 
 if [ $DEBUG -eq 1 ];
@@ -288,7 +303,10 @@ install)
     fi
     ;;
 update)
-    cache_update $2
+    list_update
+    ;;
+download)
+    dist_download $2
     ;;
 -h|--help|help)
 	usage
