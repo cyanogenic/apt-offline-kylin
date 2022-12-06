@@ -50,7 +50,7 @@ conf_test()
             if [ -f "$WORKSPACE/etc/$CONF_FILE.example" ];
             then
                 cp $WORKSPACE/etc/$CONF_FILE.example $WORKSPACE/etc/$CONF_FILE
-                echo "完成"
+                echo -e "\e[32m 完成 \e[0m"
             else
                 echo "没有检测到配置文件及模板,请重新下载完整的程序"
                 exit 1
@@ -266,18 +266,19 @@ dist_download()
     echo "更新操作已完成,日志已保存到$WORKSPACE/logs/wget.log"
 }
 
-# 启动
-if [ -z $1 ]; then
-	usage
-	exit 1
-fi
-
+## 启动
+# 配置文件检查
 conf_test
 source $WORKSPACE/etc/apt-offline-kylin.conf
 
+# dist检查
 dist_check
-CACHE_CHECK=$?
+if [ $? -eq 1 ];
+then
+    exit 1
+fi
 
+# debug检测
 if [ $DEBUG -eq 1 ];
 then
     DOWNLOAD_COMMAND="echo -ne \nwget"
@@ -285,6 +286,7 @@ else
     DOWNLOAD_COMMAND="wget"
 fi
 
+# curl检测
 curl > /dev/null 2>&1
 if [ $? -eq 0 ];
 then
@@ -293,14 +295,16 @@ else
     GET_COMMAND="wget -q -O-"
 fi
 
+# 参数检测
+if [ -z $1 ]; then
+	usage
+	exit 1
+fi
+
+# 正文
 case $1 in
 install)
-    if [ $CACHE_CHECK -eq 1 ];
-    then
-        exit 1
-    else
-        simulate_install $@
-    fi
+    simulate_install $@
     ;;
 update)
     list_update
