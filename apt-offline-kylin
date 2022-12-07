@@ -206,7 +206,7 @@ dist_check()
 
     elif [ `ls $WORKSPACE/dists 2>/dev/null | wc -l` -eq 0 ];
     then
-        echo -e "您可能刚刚下载或从其它位置拷贝了本程序,请在互联网环境中执行 $APPNAME update 更新资源文件\n"
+        echo -e "您可能刚刚下载或从其它位置拷贝了本程序,请在互联网环境中执行 $APPNAME download 下载资源文件\n"
         return 1
     fi
 }
@@ -273,7 +273,7 @@ source $WORKSPACE/etc/apt-offline-kylin.conf
 
 # dist检查
 dist_check
-if [ $? -eq 1 ];
+if [[ $? -eq 1 && $1 != "download" ]];
 then
     exit 1
 fi
