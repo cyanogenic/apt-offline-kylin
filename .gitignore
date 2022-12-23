@@ -1,2 +1,4 @@
 etc/apt-offline-kylin.conf
 etc/mirrors.list
+.vscode/
+venv/
